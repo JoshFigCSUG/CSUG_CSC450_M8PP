@@ -1,0 +1,115 @@
+start
+
+    // Shared Resources
+    DECLARE INTEGER shared_counter = 0 // Counter shared between threads.
+    DECLARE OBJECT counter_mutex // Protects shared_counter.
+    DECLARE BOOLEAN count_up_finished = FALSE // Flag indicating if "count up" thread is done.
+
+    // Main function
+    FUNCTION main()
+        DISPLAY "Program started."
+
+        // Create two threads for "count up" and "count down" processes
+        DECLARE THREAD up_thread
+        DECLARE THREAD down_thread
+
+        CREATE THREAD up_thread WITH FUNCTION ConcurrentCounters::countUp, NAME "CountUpThread"
+        CREATE THREAD down_thread WITH FUNCTION ConcurrentCounters::countDown, NAME "CountDownThread"
+
+        DISPLAY "Main: Starting CountUpThread..."
+        START THREAD up_thread
+
+        DISPLAY "Main: Starting CountDownThread (will wait for CountUpThread to finish)..."
+        START THREAD down_thread
+
+        // Wait for both threads to complete
+        JOIN THREAD up_thread   // 'join()' pauses the main thread until 'up_thread' is done.
+        JOIN THREAD down_thread // 'join()' pauses the main thread until 'down_thread' is done.
+
+        // After both threads have finished, print update message with the final value of the shared_counter.
+        DISPLAY "Both threads finished. Final shared_counter: ", shared_counter
+        DISPLAY "Program finished."
+    ENDFUNCTION
+
+    // Function for the "count up" thread
+    FUNCTION countUp()
+        DISPLAY CURRENT_THREAD_NAME(), ": Started."
+        // Iterate from 0 to 20
+        FOR i FROM 0 TO 20 STEP 1
+            // Acquire lock on the counter_mutex using a synchronized block.
+            ACQUIRE_LOCK_ON counter_mutex
+                // Set shared_counter to current iteration
+                shared_counter = i
+                // Print current count up value progress
+                DISPLAY CURRENT_THREAD_NAME(), ": ", shared_counter
+            RELEASE_LOCK_ON counter_mutex // The synchronized block ends here, automatically releasing the lock.
+
+            // Simulate work and thread communication using a pause.
+            TRY
+                SLEEP 100 MILLISECONDS
+            CATCH InterruptedException
+                INTERRUPT CURRENT_THREAD()
+                DISPLAY CURRENT_THREAD_NAME(), ": Interrupted."
+                RETURN
+            ENDTRY
+        ENDFOR
+
+        // Acquire lock again to update shared flag and notify waiting "count down" thread.
+        ACQUIRE_LOCK_ON counter_mutex
+            // Set flag to true indicating count up is complete
+            count_up_finished = TRUE
+            // Print thread counting up update message
+            DISPLAY CURRENT_THREAD_NAME(), " finished. Notifying Count Down thread."
+            // Notify waiting "count down" thread that the condition (count_up_finished) has been met.
+            NOTIFY_ALL_ON counter_mutex // Using notifyAll() as good practice, though notify() would suffice here.
+        RELEASE_LOCK_ON counter_mutex // Lock is once again out of scope and automatically released.
+    ENDFUNCTION
+
+    // Function for the "count down" thread
+    FUNCTION countDown()
+        DISPLAY CURRENT_THREAD_NAME(), ": Started."
+        // Acquire lock on the counter_mutex.
+        ACQUIRE_LOCK_ON counter_mutex
+            DISPLAY CURRENT_THREAD_NAME(), ": Waiting for Count Up to finish..."
+            // Wait on 'counter_mutex'. This pauses the current thread and releases the lock until 'notifyAll' is called
+            // and 'count_up_finished' is true.
+            WHILE NOT count_up_finished
+                TRY
+                    WAIT_ON counter_mutex
+                CATCH InterruptedException
+                    INTERRUPT CURRENT_THREAD()
+                    DISPLAY CURRENT_THREAD_NAME(), ": Interrupted while waiting."
+                    RETURN
+                ENDTRY
+            ENDWHILE
+            // After 'count_up_finished' is true, the thread resumes, and the lock is reacquired.
+
+            // Print starting count down value (which is the final value from the "count up" thread.)
+            DISPLAY CURRENT_THREAD_NAME(), ": Starting from ", shared_counter
+        RELEASE_LOCK_ON counter_mutex // The synchronized block ends here, automatically releasing the lock.
+
+        // Get the current value of shared_counter outside the synchronized block to start the loop.
+        DECLARE INTEGER startValue = shared_counter
+        // Iterate from shared_counter down to 0
+        FOR i FROM startValue DOWNTO 0 STEP 1
+            // Acquire lock for each update to shared_counter within the loop, enabling atomic operations.
+            ACQUIRE_LOCK_ON counter_mutex
+                // Set shared_counter to current iteration
+                shared_counter = i
+                // Print current count down value progress
+                DISPLAY CURRENT_THREAD_NAME(), ": ", shared_counter
+            RELEASE_LOCK_ON counter_mutex // The lock is automatically released here.
+
+            // Simulate work using a pause.
+            TRY
+                SLEEP 100 MILLISECONDS
+            CATCH InterruptedException
+                INTERRUPT CURRENT_THREAD()
+                DISPLAY CURRENT_THREAD_NAME(), ": Interrupted."
+                RETURN
+            ENDTRY
+        ENDFOR
+        DISPLAY CURRENT_THREAD_NAME(), ": Finished."
+    ENDFUNCTION
+
+stop
